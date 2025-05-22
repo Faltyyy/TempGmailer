@@ -40,7 +40,7 @@ A Discord bot that generates temporary Gmail addresses, checks inboxes, and auto
 2. Click "New Application" and give it a name
 3. Navigate to the "Bot" tab and click "Add Bot"
 4. Under "Privileged Gateway Intents", enable "Message Content Intent"
-5. Copy the bot token and add it to your `bot3.py` file
+5. Copy the bot token and add it to your `bot.py` file
 6. Use the OAuth2 URL Generator in the "OAuth2" tab to generate an invite link:
    - Select the scopes: `bot`
    - Select the permissions: `Send Messages`, `Read Messages/View Channels`, `Embed Links`, `Attach Files`
@@ -50,12 +50,12 @@ A Discord bot that generates temporary Gmail addresses, checks inboxes, and auto
 
 1. Run the bot:
    ```bash
-   python bot3.py
+   python bot.py
    ```
 
 2. The bot will automatically post the main menu in the first available text channel:
 
-   ![Main Menu](https://i.imgur.com/example-main-menu.png)
+   ![Main Menu]([https://imgur.com/dzaLDBo])
 
 3. Use the dropdown menu to:
    - **Generate Email**: Creates a temporary Gmail address and displays it in a panel
