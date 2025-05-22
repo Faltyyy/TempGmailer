@@ -55,7 +55,7 @@ A Discord bot that generates temporary Gmail addresses, checks inboxes, and auto
 
 2. The bot will automatically post the main menu in the first available text channel:
 
-   ![Main Menu]([https://imgur.com/dzaLDBo])
+   [Main Menu](https://imgur.com/dzaLDBo)
 
 3. Use the dropdown menu to:
    - **Generate Email**: Creates a temporary Gmail address and displays it in a panel
@@ -81,7 +81,7 @@ The bot validates generated emails to ensure they:
 ## 🔄 API Integration
 
 This bot uses the GMail Nator API through RapidAPI:
-- [GMail Nator API on RapidAPI](https://rapidapi.com/calvinloveland335703-0p6BxLYIH8f/api/gmailnator)
+- [GMail Nator API on RapidAPI](https://rapidapi.com/johndevz/api/gmailnator)
 
 The API provides:
 - Email generation
