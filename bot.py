@@ -1,9 +1,11 @@
+import asyncio
+import datetime
+
+import requests
 import discord
 from discord.ext import commands, tasks
 from discord import ButtonStyle
 from discord.ui import View, Select, Button
-import requests
-import datetime
 
 # Discord Bot authentication token
 # Replace this token with your own token (without extra quotes)
@@ -330,20 +332,26 @@ async def on_interaction(interaction):
                     break
         
         elif custom_id == "submit_check_email":
-            # Extract email from message content
-            embed = interaction.message.embeds[0]
-            email_content = embed.fields[0].value if embed.fields else None
-            
-            if email_content and "@" in email_content:
-                # Extract email address
-                email = email_content.split("\n")[0].strip()
-                
-                # Check inbox
-                await check_specific_email(interaction, email)
-            else:
-                # Invalid or missing email
-                await interaction.response.send_message(
-                    "⚠️ Invalid or missing email. Please try again.",
+            # Wait for the user's message containing the email address
+            def msg_check(message):
+                return message.author == interaction.user and message.channel == interaction.channel
+
+            await interaction.response.defer(ephemeral=True)
+
+            try:
+                user_msg = await bot.wait_for("message", timeout=30.0, check=msg_check)
+                email = user_msg.content.strip()
+
+                if is_valid_email(email):
+                    await check_specific_email(interaction, email)
+                else:
+                    await interaction.followup.send(
+                        "⚠️ Invalid email. Please try again.",
+                        ephemeral=True
+                    )
+            except asyncio.TimeoutError:
+                await interaction.followup.send(
+                    "⌛ Timed out waiting for email address.",
                     ephemeral=True
                 )
 
