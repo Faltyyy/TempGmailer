@@ -1,19 +1,28 @@
 import asyncio
 import datetime
+import os
+from dotenv import load_dotenv
+import threading
+import aiohttp
 
-import requests
 import discord
 from discord.ext import commands, tasks
 from discord import ButtonStyle
 from discord.ui import View, Select, Button
 
+# Load environment variables from .env file
+load_dotenv()
+
 # Discord Bot authentication token
-# Replace this token with your own token (without extra quotes)
-# Example format: YOUR_DISCORD_BOT_TOKEN_HERE
-TOKEN = "YOUR_DISCORD_BOT_TOKEN_HERE"  # Replace with your actual token
+# Load from environment variable for security
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("DISCORD_BOT_TOKEN environment variable is required")
 
 # RapidAPI configuration
-RAPIDAPI_KEY = "YOUR_RAPID_API_HERE"
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+if not RAPIDAPI_KEY:
+    raise ValueError("RAPIDAPI_KEY environment variable is required")
 RAPIDAPI_HOST = "gmailnator.p.rapidapi.com"
 API_HEADERS = {
     "x-rapidapi-key": RAPIDAPI_KEY,
@@ -28,11 +37,17 @@ intents.message_content = True
 # Initialize the bot
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Global HTTP session for async requests
+http_session = None
+
 # Store generated emails for auto-refresh functionality
 active_emails = {}  # {email: {'expiry_time': datetime, 'channel_id': channel_id, 'message_id': message_id, 'seen_message_ids': set()}}
 
 # Store panel messages for updates
 panel_messages = {}  # {channel_id: message}
+
+# Lock for thread-safe access to active_emails
+active_emails_lock = threading.Lock()
 
 # Main menu dropdown class
 class MainMenuView(View):
@@ -103,9 +118,30 @@ def is_valid_email(email):
         return False
     return True
 
+async def make_api_request(url, payload=None, method="POST"):
+    """Make an async API request using aiohttp"""
+    global http_session
+    if not http_session:
+        raise RuntimeError("HTTP session not initialized")
+    
+    try:
+        if method == "POST":
+            async with http_session.post(url, json=payload, headers=API_HEADERS) as response:
+                return await response.json()
+        else:
+            async with http_session.get(url, headers=API_HEADERS) as response:
+                return await response.json()
+    except Exception as e:
+        print(f"API request failed: {e}")
+        return None
+
 @bot.event
 async def on_ready():
+    global http_session
     print(f"{bot.user.name} successfully connected!")
+    
+    # Initialize HTTP session
+    http_session = aiohttp.ClientSession()
     
     # Find a channel to send the initial message
     for guild in bot.guilds:
@@ -118,6 +154,12 @@ async def on_ready():
             except Exception as e:
                 print(f"Could not send message to {channel.name}: {e}")
                 # Continue trying another channel
+
+@bot.event
+async def on_disconnect():
+    global http_session
+    if http_session:
+        await http_session.close()
 
 # Function to show the main menu
 async def show_main_menu(channel):
@@ -171,10 +213,9 @@ async def generate_email(interaction):
         valid_email_found = False
         
         while attempts < max_attempts and not valid_email_found:
-            response = requests.post(url, json=payload, headers=API_HEADERS)
-            data = response.json()
+            data = await make_api_request(url, payload)
             
-            if "email" in data:
+            if data and "email" in data:
                 email = data["email"]
                 
                 if is_valid_email(email):
@@ -183,12 +224,13 @@ async def generate_email(interaction):
                     
                     # Add to active emails for auto-refresh
                     expiry_time = datetime.datetime.now() + datetime.timedelta(minutes=3)
-                    active_emails[email] = {
-                        'expiry_time': expiry_time,
-                        'channel_id': interaction.channel.id,
-                        'message_id': interaction.message.id,
-                        'seen_message_ids': set()
-                    }
+                    with active_emails_lock:
+                        active_emails[email] = {
+                            'expiry_time': expiry_time,
+                            'channel_id': interaction.channel.id,
+                            'message_id': interaction.message.id,
+                            'seen_message_ids': set()
+                        }
                     
                     # Create email panel
                     await show_email_panel(interaction, email)
@@ -249,7 +291,9 @@ async def show_email_panel(interaction, email):
     await interaction.message.edit(embed=embed, view=view)
     
     # Update message ID in active emails registry
-    active_emails[email]['message_id'] = interaction.message.id
+    with active_emails_lock:
+        if email in active_emails:  # Check if email still exists
+            active_emails[email]['message_id'] = interaction.message.id
     print(f"Auto-refresh enabled for {email} with message_id {interaction.message.id}")
 
 # Function to show email check form
@@ -288,14 +332,17 @@ async def on_interaction(interaction):
             message_id = interaction.message.id
             emails_to_remove = []
             
-            for email, data in active_emails.items():
-                if data.get('message_id') == message_id:
-                    emails_to_remove.append(email)
-            
-            # Remove emails from monitoring
-            for email in emails_to_remove:
-                del active_emails[email]
-                print(f"Auto-refresh disabled for {email} when returning to menu")
+            # Use lock to prevent race conditions
+            with active_emails_lock:
+                for email, data in active_emails.items():
+                    if data.get('message_id') == message_id:
+                        emails_to_remove.append(email)
+                
+                # Remove emails from monitoring
+                for email in emails_to_remove:
+                    if email in active_emails:  # Check if email still exists
+                        del active_emails[email]
+                        print(f"Auto-refresh disabled for {email} when returning to menu")
             
             # Return to main menu
             await interaction.message.delete()
@@ -307,14 +354,17 @@ async def on_interaction(interaction):
             message_id = interaction.message.id
             emails_to_remove = []
             
-            for email, data in active_emails.items():
-                if data.get('message_id') == message_id:
-                    emails_to_remove.append(email)
-            
-            # Remove emails from monitoring
-            for email in emails_to_remove:
-                del active_emails[email]
-                print(f"Auto-refresh disabled for {email} before generating new email")
+            # Use lock to prevent race conditions
+            with active_emails_lock:
+                for email, data in active_emails.items():
+                    if data.get('message_id') == message_id:
+                        emails_to_remove.append(email)
+                
+                # Remove emails from monitoring
+                for email in emails_to_remove:
+                    if email in active_emails:  # Check if email still exists
+                        del active_emails[email]
+                        print(f"Auto-refresh disabled for {email} before generating new email")
             
             # Generate another email
             await generate_email(interaction)
@@ -439,8 +489,8 @@ async def check_inbox(email):
     }
     
     try:
-        response = requests.post(url, json=payload, headers=API_HEADERS)
-        return response.json()
+        data = await make_api_request(url, payload)
+        return data
     except Exception as e:
         print(f"Error checking inbox: {e}")
         return None
@@ -451,7 +501,12 @@ async def check_emails():
     current_time = datetime.datetime.now()
     emails_to_remove = []
     
-    for email, data in active_emails.items():
+    # Use lock to prevent race conditions when iterating and modifying active_emails
+    with active_emails_lock:
+        # Create a copy of items to iterate over safely
+        emails_to_check = list(active_emails.items())
+    
+    for email, data in emails_to_check:
         if current_time > data['expiry_time']:
             emails_to_remove.append(email)
             print(f"Email expired: {email}")
@@ -480,18 +535,29 @@ async def check_emails():
                 # Track new messages
                 new_messages = []
                 
-                # If we don't have a seen_message_ids set for this email, create one
-                if 'seen_message_ids' not in active_emails[email]:
-                    active_emails[email]['seen_message_ids'] = set()
-                
-                # Check for new messages
-                for msg in inbox:
-                    # Use message ID or a combination of from+subject+date as unique identifier
-                    msg_id = msg.get('id', f"{msg.get('from', '')}-{msg.get('subject', '')}-{msg.get('date', '')}")
+                # Check for new messages with proper locking
+                with active_emails_lock:
+                    if email not in active_emails:
+                        continue  # Email was removed, skip
                     
-                    if msg_id not in active_emails[email]['seen_message_ids']:
-                        new_messages.append(msg)
-                        active_emails[email]['seen_message_ids'].add(msg_id)
+                    # If we don't have a seen_message_ids set for this email, create one
+                    if 'seen_message_ids' not in active_emails[email]:
+                        active_emails[email]['seen_message_ids'] = set()
+                    
+                    # Check for new messages
+                    for msg in inbox:
+                        # Use message ID or a combination of from+subject+date as unique identifier
+                        msg_id = msg.get('id', f"{msg.get('from', '')}-{msg.get('subject', '')}-{msg.get('date', '')}")
+                        
+                        if msg_id not in active_emails[email]['seen_message_ids']:
+                            new_messages.append(msg)
+                            active_emails[email]['seen_message_ids'].add(msg_id)
+                    
+                    # Memory management: limit seen_message_ids to prevent memory leaks
+                    if len(active_emails[email]['seen_message_ids']) > 100:
+                        # Keep only the most recent 50 message IDs
+                        seen_ids = list(active_emails[email]['seen_message_ids'])
+                        active_emails[email]['seen_message_ids'] = set(seen_ids[-50:])
                 
                 # Only send notification if there are new messages
                 if new_messages and message:
@@ -546,16 +612,26 @@ async def check_emails():
                     view = EmailPanelView()
                     
                     new_message = await channel.send(embed=embed, view=view)
-                    active_emails[email]['message_id'] = new_message.id
+                    with active_emails_lock:
+                        if email in active_emails:  # Check if email still exists
+                            active_emails[email]['message_id'] = new_message.id
         
         except Exception as e:
             print(f"Error checking inbox for {email}: {e}")
     
     # Remove expired emails
-    for email in emails_to_remove:
-        del active_emails[email]
+    if emails_to_remove:
+        with active_emails_lock:
+            for email in emails_to_remove:
+                if email in active_emails:  # Check if email still exists
+                    del active_emails[email]
 
 # Run the bot
 if __name__ == "__main__":
     print("Starting Discord bot...")
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    finally:
+        # Cleanup on shutdown
+        if http_session:
+            asyncio.create_task(http_session.close())

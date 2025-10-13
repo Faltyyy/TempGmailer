@@ -30,9 +30,9 @@ A Discord bot that generates temporary Gmail addresses, checks inboxes, and auto
    ```
 
 3. Configure the bot:
-   - Open `bot.py` 
-   - Replace the Discord bot token with your own token
-   - Optionally, replace the RapidAPI key if you want to use your own
+   - Copy `.env.example` to `.env`
+   - Edit `.env` and add your Discord bot token and RapidAPI key
+   - Never commit the `.env` file to version control
 
 ## 🔐 Setting Up Discord Bot
 
